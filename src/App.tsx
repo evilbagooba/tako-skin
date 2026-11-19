@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { migrateProject, type Project } from "core";
 import { compileDeck, type Deck, type Slide } from "./compile";
 
@@ -114,10 +115,36 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
   const [presenting, setPresenting] = useState(false);
   const deck = useMemo<Deck | null>(() => (pathId ? compileDeck(project, pathId) : null), [project, pathId]);
   const slides = deck?.slides ?? [];
+  const gapCount = deck?.preflight.filter((i) => i.level === "gap").length ?? 0;
   const current = slides[Math.min(index, slides.length - 1)];
-  const go = useCallback((i: number) => setIndex(Math.max(0, Math.min(i, slides.length - 1))), [slides.length]);
+  // Moving between slides is a view transition: the slide slides in the
+  // direction of travel (a crossfade under reduced motion; see theme.css).
+  // A new move during one finishes the old one first, so it never blocks.
+  const indexRef = useRef(index);
+  indexRef.current = index;
+  const go = useCallback(
+    (i: number) => {
+      const next = Math.max(0, Math.min(i, slides.length - 1));
+      if (next === indexRef.current) return;
+      const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+      if (!doc.startViewTransition) {
+        setIndex(next);
+        return;
+      }
+      document.documentElement.dataset.travel = next > indexRef.current ? "forward" : "back";
+      doc.startViewTransition(() => flushSync(() => setIndex(next)));
+    },
+    [slides.length],
+  );
 
   useEffect(() => setIndex(0), [pathId]);
+  // Keep the current thumbnail in view (the rail scrolls; on phones it's a
+  // horizontal strip).
+  useEffect(() => {
+    document
+      .querySelector('.thumb[aria-current="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [index]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -131,7 +158,6 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
       } else if (e.key === "Home") go(0);
       else if (e.key === "End") go(slides.length - 1);
       else if (e.key.toLowerCase() === "s" && !e.ctrlKey && !e.metaKey) setShowSources((v) => !v);
-      else if (e.key === "Escape" && presenting) setPresenting(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -211,12 +237,12 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
           </button>
         </header>
 
-        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "minmax(12rem, 16rem) 1fr", gap: "0.5rem", padding: "0 0.5rem 0.5rem", minBlockSize: 0 }} className="deck-layout">
-          <aside className="island" style={{ display: "flex", flexDirection: "column", minBlockSize: 0, overflow: "hidden" }}>
+        <div className="deck-layout">
+          <aside className="island deck-rail">
             {deck && deck.preflight.length > 0 && (
               <section aria-label="Pre-flight check" style={{ padding: "0.75rem", borderBlockEnd: "1px solid var(--border)" }}>
                 <h2 className="label" style={{ margin: "0 0 0.5rem" }}>
-                  Pre-flight · {deck.preflight.filter((i) => i.level === "gap").length} gaps
+                  Pre-flight · {gapCount} {gapCount === 1 ? "gap" : "gaps"}
                 </h2>
                 <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: "0.375rem", fontSize: "0.8125rem" }}>
                   {deck.preflight.map((i, k) => (
@@ -237,7 +263,7 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
                 </ul>
               </section>
             )}
-            <ol aria-label="Slides" style={{ margin: 0, padding: "0.375rem", listStyle: "none", overflowY: "auto", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <ol aria-label="Slides" className="thumbs">
               {slides.map((s, i) => (
                 <li key={s.id}>
                   <button type="button" className="thumb" aria-current={s === current} onClick={() => go(i)} style={{ inlineSize: "100%" }}>
@@ -251,8 +277,10 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
             </ol>
           </aside>
 
-          <main style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minBlockSize: 0, overflowY: "auto" }}>
-            {current && <SlideView slide={current} total={slides.length - 1} showSources={showSources} />}
+          <main className="deck-main">
+            {current && (
+              <SlideView slide={current} total={slides.length - 1} showSources={showSources} live={!presenting} />
+            )}
             {current?.kind === "stop" && (
               <section className="island" aria-label="Speaker notes" style={{ padding: "0.75rem 1rem" }}>
                 <h2 className="label" style={{ margin: "0 0 0.375rem" }}>Speaker notes</h2>
@@ -269,19 +297,21 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
               </section>
             )}
             <p className="label" style={{ margin: 0, textAlign: "center" }}>
-              ← → to move · S sources · {index + 1} / {slides.length}
+              <span className="keys-hint">← → to move · S sources · </span>
+              {index + 1} / {slides.length}
             </p>
           </main>
         </div>
       </div>
 
       {presenting && current && (
-        <div className="stage" role="dialog" aria-label="Presenting" onClick={() => go(index + 1)}>
-          <SlideView slide={current} total={slides.length - 1} showSources={showSources} />
+        <Stage onClose={() => setPresenting(false)} onNext={() => go(index + 1)} onBack={() => go(index - 1)}>
+          <SlideView slide={current} total={slides.length - 1} showSources={showSources} live />
           <p className="stage-hint">
-            {index + 1} / {slides.length} · Esc to stop
+            {index + 1} / {slides.length}
+            <span className="keys-hint"> · ← → · Esc to stop</span>
           </p>
-        </div>
+        </Stage>
       )}
 
       <div className="print-deck" aria-hidden>
@@ -293,10 +323,22 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
   );
 }
 
-function SlideView({ slide, total, showSources }: { slide: Slide; total: number; showSources: boolean }) {
+function SlideView({
+  slide,
+  total,
+  showSources,
+  live = false,
+}: {
+  slide: Slide;
+  total: number;
+  showSources: boolean;
+  /** The one slide on screen that view transitions animate (names must be unique). */
+  live?: boolean;
+}) {
+  const live_ = live ? " slide-live" : "";
   if (slide.kind === "title") {
     return (
-      <article className="slide slide-title-slide" aria-label={`Title slide: ${slide.title}`}>
+      <article className={`slide slide-title-slide${live_}`} aria-label={`Title slide: ${slide.title}`}>
         <div className="slide-inner">
           <p className="slide-kicker" style={{ margin: 0 }}>
             {slide.stops} {slide.stops === 1 ? "stop" : "stops"}
@@ -312,7 +354,7 @@ function SlideView({ slide, total, showSources }: { slide: Slide; total: number;
   const images = slide.artifacts.filter((a) => a.isImage);
   const links = slide.artifacts.filter((a) => !a.isImage);
   return (
-    <article className="slide" aria-label={`Stop ${slide.stop}: ${n.title}`}>
+    <article className={`slide${live_}`} aria-label={`Stop ${slide.stop}: ${n.title}`}>
       <div className="slide-inner">
         <p className="slide-kicker" style={{ margin: 0 }}>
           <span
@@ -409,5 +451,59 @@ function ArtifactImage({ title, link }: { title: string; link: string }) {
         </>
       )}
     </figure>
+  );
+}
+
+/** Presenting: a native modal <dialog> (top layer, focus kept inside, Esc
+ * closes it natively). Pointer: swipe left/right to move, judged on offset
+ * or flick velocity; a tap on the left third goes back, elsewhere forward. */
+function Stage({
+  onClose,
+  onNext,
+  onBack,
+  children,
+}: {
+  onClose: () => void;
+  onNext: () => void;
+  onBack: () => void;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement | null>(null);
+  const start = useRef<{ x: number; y: number; t: number } | null>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="stage"
+      aria-label="Presenting"
+      onClose={onClose}
+      onPointerDown={(e) => {
+        start.current = { x: e.clientX, y: e.clientY, t: e.timeStamp };
+      }}
+      onPointerUp={(e) => {
+        const s = start.current;
+        start.current = null;
+        if (!s || (e.target as HTMLElement).closest("a, button")) return;
+        const dx = e.clientX - s.x;
+        const dy = e.clientY - s.y;
+        const v = Math.abs(dx) / Math.max(1, e.timeStamp - s.t); // px per ms
+        const horizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
+        if (horizontal && (Math.abs(dx) > 80 || (Math.abs(dx) > 24 && v > 0.5))) {
+          if (dx < 0) onNext();
+          else onBack();
+        } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+          if (e.clientX < window.innerWidth / 3) onBack();
+          else onNext();
+        }
+      }}
+      onPointerCancel={() => {
+        start.current = null;
+      }}
+    >
+      {children}
+    </dialog>
   );
 }

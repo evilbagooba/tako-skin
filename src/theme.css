@@ -326,19 +326,148 @@ img {
   pointer-events: none;
 }
 
-/* Full-screen presenting: the stage centres the largest 16:9 slide. */
+/* Full-screen presenting: a modal <dialog> filling the (dynamic) viewport,
+   centring the largest 16:9 slide. dvh, so mobile browser toolbars (and
+   iPhone, which has no Fullscreen API) don't crop the slide. */
 .stage {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  inline-size: 100dvw;
+  block-size: 100dvh;
+  max-inline-size: none;
+  max-block-size: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
   display: grid;
   place-items: center;
   background: #111;
+  touch-action: pan-y pinch-zoom;
+  user-select: none;
+}
+.stage::backdrop {
+  background: #111;
+}
+.stage:focus-visible {
+  outline: none;
 }
 .stage .slide {
-  inline-size: min(100vw, 177.78vh);
+  inline-size: min(100dvw, 177.78dvh);
   border: 0;
   border-radius: 0;
+}
+
+/* Moving between slides: the live slide slides in the direction of travel
+   (data-travel on <html>, set just before each transition). Reduced motion
+   keeps the change visible as a short crossfade, without movement. */
+.slide-live {
+  view-transition-name: live-slide;
+}
+::view-transition-group(live-slide) {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+::view-transition-old(live-slide) {
+  animation: 240ms cubic-bezier(0.2, 0.9, 0.3, 1) both slide-out;
+}
+::view-transition-new(live-slide) {
+  animation: 240ms cubic-bezier(0.2, 0.9, 0.3, 1) both slide-in;
+}
+html[data-travel="back"]::view-transition-old(live-slide) {
+  animation-name: slide-out-back;
+}
+html[data-travel="back"]::view-transition-new(live-slide) {
+  animation-name: slide-in-back;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 120ms;
+}
+@keyframes slide-out {
+  to { translate: -6% 0; opacity: 0; }
+}
+@keyframes slide-in {
+  from { translate: 6% 0; opacity: 0; }
+}
+@keyframes slide-out-back {
+  to { translate: 6% 0; opacity: 0; }
+}
+@keyframes slide-in-back {
+  from { translate: -6% 0; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(live-slide),
+  html[data-travel]::view-transition-old(live-slide) {
+    animation: 140ms linear both fade-out;
+  }
+  ::view-transition-new(live-slide),
+  html[data-travel]::view-transition-new(live-slide) {
+    animation: 140ms linear both fade-in;
+  }
+}
+@keyframes fade-out {
+  to { opacity: 0; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+/* Deck screen: thumbnail rail + current slide. On narrow screens the rail
+   drops below the slide. */
+.deck-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) 1fr;
+  gap: 0.5rem;
+  padding: 0 0.5rem 0.5rem;
+  min-block-size: 0;
+}
+.deck-rail {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+  overflow: hidden;
+}
+.deck-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-block-size: 0;
+  overflow-y: auto;
+}
+.thumbs {
+  margin: 0;
+  padding: 0.375rem;
+  list-style: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+@media (width <= 720px) {
+  .deck-layout {
+    grid-template-columns: 1fr;
+  }
+  .deck-rail {
+    order: 2;
+  }
+  /* Phones: thumbnails become a horizontal strip that snaps per slide. */
+  .thumbs {
+    flex-direction: row;
+    overflow: auto hidden;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: inline mandatory;
+    scroll-padding-inline: 0.375rem;
+  }
+  .thumbs > li {
+    flex: 0 0 9.5rem;
+    scroll-snap-align: start;
+  }
+}
+@media (pointer: coarse) {
+  .keys-hint {
+    display: none;
+  }
 }
 .stage-hint {
   position: fixed;
@@ -382,11 +511,3 @@ img {
   }
 }
 
-@media (max-width: 720px) {
-  .deck-layout {
-    grid-template-columns: 1fr !important;
-  }
-  .deck-layout > aside {
-    order: 2;
-  }
-}

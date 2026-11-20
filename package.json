@@ -1,6 +1,6 @@
 {
   "name": "tako-skin",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Render a path through an idea graph as slides. A compiler, not an author: every element on a slide maps back to the project.",
   "type": "module",

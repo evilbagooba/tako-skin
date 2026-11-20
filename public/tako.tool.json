@@ -4,5 +4,5 @@
   "title": "Slides",
   "tagline": "A talk, compiled from a path through your graph.",
   "opens": ["project", "node"],
-  "version": "0.3.0"
+  "version": "0.3.1"
 }

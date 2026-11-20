@@ -18,6 +18,10 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: tar -czf tako-tool.tgz -C dist .
-      - run: gh release create "$GITHUB_REF_NAME" tako-tool.tgz --title "$GITHUB_REF_NAME" --notes "Built page. Install into a tako hub with: tako add $GITHUB_REPOSITORY"
+      - name: Publish the release
+        run: |
+          gh release create "$GITHUB_REF_NAME" tako-tool.tgz \
+            --title "$GITHUB_REF_NAME" \
+            --notes "The built page. Install it into a tako hub by running tako add $GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}

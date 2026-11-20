@@ -4,9 +4,9 @@
 // or filled in. A stop with no evidence is shown as untested, and listed in
 // the pre-flight check, rather than padded with plausible text.
 //
-// Pure and framework-free, so it's tested against core's fixture projects.
+// Pure and framework-free, so it's tested against tako's fixture projects.
 
-import type { Narrative, Project, ProjectNode } from "core/model";
+import type { Narrative, Project, ProjectNode } from "tako/model";
 
 /** Where a piece of content came from: "node:<id>", "work:<id>",
  * "edge:<id>", "artifact:<id>", "narrative:<id>", "project". */

@@ -1,6 +1,6 @@
 {
-  "name": "slides",
-  "version": "0.1.0",
+  "name": "tako-skin",
+  "version": "0.2.0",
   "private": true,
   "description": "Render a path through an idea graph as slides. A compiler, not an author: every element on a slide maps back to the project.",
   "type": "module",
@@ -15,9 +15,9 @@
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "core": "github:evilbagooba/core#v0.1.0",
     "react": "19.2.5",
     "react-dom": "19.2.5",
+    "tako": "github:evilbagooba/tako#v0.2.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {

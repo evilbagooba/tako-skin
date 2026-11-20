@@ -511,3 +511,61 @@ html[data-travel="back"]::view-transition-new(live-slide) {
   }
 }
 
+/* ---- Hub project list (open screen) ---- */
+.project-list ul {
+  max-block-size: 40dvh;
+  overflow-y: auto;
+}
+.project-list-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-block-end: 1px solid var(--border);
+}
+.project-list-head .mono {
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-list-empty {
+  padding: 0.75rem;
+}
+.project-list li + li {
+  border-block-start: 1px solid var(--border);
+}
+.project-list button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  inline-size: 100%;
+  padding: 0.625rem 0.75rem;
+  border: 0;
+  background: none;
+  text-align: start;
+  cursor: pointer;
+}
+.project-list button:hover {
+  background: var(--surface-alt);
+}
+.project-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.project-list p {
+  margin: 0;
+}
+.project-list-empty {
+  color: var(--dim);
+  font-size: 0.8125rem;
+}

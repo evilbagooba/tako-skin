@@ -1,4 +1,4 @@
-// Contract tests: compile every path in every core fixture, and hold the
+// Contract tests: compile every path in every tako fixture, and hold the
 // compiler to the suite's source-only rule.
 
 import assert from "node:assert/strict";
@@ -6,10 +6,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { migrateProject, type Project } from "core";
+import { migrateProject, type Project } from "tako";
 import { compileDeck, type Slide } from "../src/compile";
 
-const dir = dirname(fileURLToPath(import.meta.resolve("core/fixtures/sourdough.json")));
+const dir = dirname(fileURLToPath(import.meta.resolve("tako/fixtures/sourdough.json")));
 const fixtures = readdirSync(dir)
   .filter((f) => f.endsWith(".json"))
   .map((f) => ({ name: f, project: migrateProject(JSON.parse(readFileSync(`${dir}/${f}`, "utf8")), "Imported") }));
@@ -35,7 +35,7 @@ function sourceExists(p: Project, source: string): boolean {
   return !!list?.some((x) => x.id === id);
 }
 
-describe("compileDeck on core fixtures", () => {
+describe("compileDeck on tako fixtures", () => {
   it("has fixtures with paths to compile", () => {
     assert.ok(fixtures.some((f) => f.project.narratives.length > 0));
   });

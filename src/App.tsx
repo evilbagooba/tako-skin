@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
-import { migrateProject, type Project } from "core";
+import { migrateProject, type Project, type ProjectStore } from "tako";
+import { DEFAULT_HUB, connectHub, type Hub, type ProjectSummary } from "tako/client";
 import { compileDeck, type Deck, type Slide } from "./compile";
 
 // Node fills, matching the graph tool, so a stop's dot looks like its node.
@@ -15,21 +16,59 @@ const COLORS: Record<string, string> = {
   slate: "#dee1e4",
 };
 
-type Loaded = { project: Project; fileName: string };
+/** A file read once, or a hub project that stays live: the deck recompiles
+ * when another tool changes it. */
+type Loaded = { key: string; project: Project; store: ProjectStore | null };
+
+const projectParam = () => new URLSearchParams(location.search).get("project");
+function setProjectParam(id: string | null) {
+  const url = new URL(location.href);
+  if (id) url.searchParams.set("project", id);
+  else url.searchParams.delete("project");
+  history.replaceState(null, "", url);
+}
 
 export function App() {
+  // undefined: still looking for the hub. null: none running.
+  const [hub, setHub] = useState<Hub | null | undefined>(undefined);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const open = useCallback((text: string, fileName: string) => {
     try {
-      const project = migrateProject(JSON.parse(text), fileName.replace(/\.json$/i, ""));
-      setLoaded({ project, fileName });
+      const project = migrateProject(JSON.parse(text), fileName.replace(/(\.tako)?\.json$/i, ""));
+      setLoaded({ key: `file:${fileName}:${Date.now()}`, project, store: null });
       setError(null);
     } catch {
       setError(`“${fileName}” isn't a project file this version can read.`);
     }
   }, []);
+
+  const openFromHub = useCallback(async (h: Hub, id: string) => {
+    try {
+      const store = await h.open(id);
+      setLoaded({ key: `hub:${id}:${Date.now()}`, project: store.get().project, store });
+      setProjectParam(id);
+      setError(null);
+    } catch (e) {
+      setProjectParam(null);
+      setError(e instanceof Error ? e.message : "Couldn't open that project.");
+    }
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    const url = new URLSearchParams(location.search).get("hub") ?? DEFAULT_HUB;
+    void connectHub(url, { clientName: "tako-skin" }).then(async (h) => {
+      if (!live) return;
+      const id = projectParam();
+      if (h && id) await openFromHub(h, id);
+      if (live) setHub(h);
+    });
+    return () => {
+      live = false;
+    };
+  }, [openFromHub]);
 
   // Drop a file anywhere to open it.
   useEffect(() => {
@@ -47,20 +86,63 @@ export function App() {
     };
   }, [open]);
 
-  return loaded ? (
-    <DeckScreen key={loaded.fileName} project={loaded.project} onClose={() => setLoaded(null)} />
-  ) : (
-    <OpenScreen error={error} onOpen={open} />
-  );
+  if (loaded) {
+    const close = () => {
+      loaded.store?.close();
+      setProjectParam(null);
+      setLoaded(null);
+    };
+    return loaded.store ? (
+      <LiveDeck key={loaded.key} store={loaded.store} onClose={close} />
+    ) : (
+      <DeckScreen key={loaded.key} project={loaded.project} onClose={close} />
+    );
+  }
+  if (hub === undefined) return <main className="app paper" style={{ minBlockSize: "100dvh" }} aria-busy="true" />;
+  return <OpenScreen hub={hub} error={error} onOpen={open} onOpenProject={(id) => hub && void openFromHub(hub, id)} />;
 }
 
-function OpenScreen({ error, onOpen }: { error: string | null; onOpen: (text: string, name: string) => void }) {
+function LiveDeck({ store, onClose }: { store: ProjectStore; onClose: () => void }) {
+  const { project } = useSyncExternalStore(store.subscribe, store.get);
+  return <DeckScreen project={project} onClose={onClose} />;
+}
+
+function useProjectList(hub: Hub | null) {
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  useEffect(() => {
+    if (!hub) return;
+    let live = true;
+    const load = () => void hub.list().then((p) => live && setProjects(p), () => {});
+    load();
+    const off = hub.onEvent((e) => {
+      if (e.type !== "project") load();
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [hub]);
+  return projects;
+}
+
+function OpenScreen({
+  hub,
+  error,
+  onOpen,
+  onOpenProject,
+}: {
+  hub: Hub | null;
+  error: string | null;
+  onOpen: (text: string, name: string) => void;
+  onOpenProject: (id: string) => void;
+}) {
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const projects = useProjectList(hub);
   return (
     <main className="app paper" style={{ minBlockSize: "100dvh", display: "grid", placeItems: "center", padding: "1.5rem" }}>
       <div style={{ maxInlineSize: "34rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
         <div>
-          <p className="label" style={{ margin: 0 }}>Slides</p>
+          <p className="label" style={{ margin: 0 }}>tako-skin · slides</p>
           <h1 style={{ margin: "0.25rem 0 0", fontSize: "2rem", lineHeight: 1.1 }}>
             A talk, compiled from your graph
           </h1>
@@ -70,6 +152,29 @@ function OpenScreen({ error, onOpen }: { error: string | null; onOpen: (text: st
           slide. Nothing is written for you: every line on a slide comes from the file, and stops
           without evidence are shown as untested.
         </p>
+        {hub && (
+          <section className="project-list island" aria-label="Projects">
+            <p className="label project-list-head">
+              Projects <span className="mono">{hub.dir}</span>
+            </p>
+            {projects === null ? null : projects.length === 0 ? (
+              <p className="project-list-empty">No projects in the hub yet. Make one in the graph tool, or open a file below.</p>
+            ) : (
+              <ul>
+                {projects.map((p) => (
+                  <li key={p.id}>
+                    <button type="button" onClick={() => onOpenProject(p.id)}>
+                      <span className="project-title">{p.title.trim() || "Untitled"}</span>
+                      <span className="label">
+                        {p.narratives} path{p.narratives === 1 ? "" : "s"} · {p.nodes} nodes
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           <input
             ref={fileRef}
@@ -83,14 +188,14 @@ function OpenScreen({ error, onOpen }: { error: string | null; onOpen: (text: st
               if (f) void f.text().then((t) => onOpen(t, f.name));
             }}
           />
-          <button type="button" className="btn" data-variant="primary" onClick={() => fileRef.current?.click()}>
-            Open project file…
+          <button type="button" className="btn" data-variant={hub ? undefined : "primary"} onClick={() => fileRef.current?.click()}>
+            Open a file…
           </button>
           <button
             type="button"
             className="btn"
             onClick={async () => {
-              const mod = await import("core/fixtures/sourdough.json");
+              const mod = await import("tako/fixtures/sourdough.json");
               onOpen(JSON.stringify(mod.default), "Example: sourdough.json");
             }}
           >
@@ -98,6 +203,11 @@ function OpenScreen({ error, onOpen }: { error: string | null; onOpen: (text: st
           </button>
         </div>
         <p className="label" style={{ margin: 0 }}>or drop a .json file anywhere</p>
+        <p style={{ margin: 0, color: "var(--dim)", fontSize: "0.8125rem", lineHeight: 1.5 }}>
+          {hub
+            ? "Hub projects stay live: the deck updates when another tool changes the project."
+            : `No hub found at ${DEFAULT_HUB}. Run “tako” to open projects shared with the other tools.`}
+        </p>
         {error && (
           <p role="alert" style={{ margin: 0, color: "var(--danger-text)" }}>
             {error}
@@ -109,7 +219,10 @@ function OpenScreen({ error, onOpen }: { error: string | null; onOpen: (text: st
 }
 
 function DeckScreen({ project, onClose }: { project: Project; onClose: () => void }) {
-  const [pathId, setPathId] = useState(() => project.narratives[0]?.id ?? "");
+  const [chosenPath, setPathId] = useState(() => project.narratives[0]?.id ?? "");
+  // The project can change under an open deck (another tool removed the
+  // path): fall back to the first one that still exists.
+  const pathId = project.narratives.some((n) => n.id === chosenPath) ? chosenPath : (project.narratives[0]?.id ?? "");
   const [index, setIndex] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [presenting, setPresenting] = useState(false);

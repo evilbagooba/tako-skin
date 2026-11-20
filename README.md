@@ -38,6 +38,16 @@ uploaded. This tool only reads; it never changes a project. Present with
 **Present ▶** (full screen; ← → or click to move, Esc to stop), or **Print /
 PDF** for one slide per page.
 
+## In the suite
+
+`public/tako.tool.json` is how this tool describes itself to the hub.
+Installed with `tako add evilbagooba/tako-skin`, it is served by the hub at
+`/skin/`. With other tools present, the header links to them, pointed at the
+node of the slide you're on. A link into this tool with `?node=<id>` opens
+the first path that visits that node, on its slide. Pushing a `v*` tag
+builds the page and attaches it to a release as `tako-tool.tgz`
+(`.github/workflows/release.yml`).
+
 ## Develop
 
 ```sh

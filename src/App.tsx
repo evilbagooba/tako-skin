@@ -1,7 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import { migrateProject, type Project, type ProjectStore } from "tako";
-import { DEFAULT_HUB, connectHub, type Hub, type ProjectSummary } from "tako/client";
+import { DEFAULT_HUB, findHub, linkTarget, type Hub, type ProjectSummary, type ToolInfo, type ToolManifest } from "tako/client";
+import manifest from "../public/tako.tool.json";
+
+/** How this tool describes itself to the hub and to the other tools. */
+const SELF = manifest as ToolManifest;
+
+/** The other tools reachable right now, for "open this in…" links. */
+function useOtherTools(hub: Hub | null): ToolInfo[] {
+  const [tools, setTools] = useState<ToolInfo[]>([]);
+  useEffect(() => {
+    if (!hub) return;
+    let live = true;
+    const load = () => void hub.tools().then((t) => live && setTools(t.filter((x) => x.id !== SELF.id)), () => {});
+    load();
+    const off = hub.onEvent((e) => {
+      if (e.type === "tools" || e.type === "resync") load();
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [hub]);
+  return tools;
+}
 import { compileDeck, type Deck, type Slide } from "./compile";
 
 // Node fills, matching the graph tool, so a stop's dot looks like its node.
@@ -18,7 +41,7 @@ const COLORS: Record<string, string> = {
 
 /** A file read once, or a hub project that stays live: the deck recompiles
  * when another tool changes it. */
-type Loaded = { key: string; project: Project; store: ProjectStore | null };
+type Loaded = { key: string; project: Project; store: ProjectStore | null; hub: Hub | null; id: string };
 
 const projectParam = () => new URLSearchParams(location.search).get("project");
 function setProjectParam(id: string | null) {
@@ -37,7 +60,7 @@ export function App() {
   const open = useCallback((text: string, fileName: string) => {
     try {
       const project = migrateProject(JSON.parse(text), fileName.replace(/(\.tako)?\.json$/i, ""));
-      setLoaded({ key: `file:${fileName}:${Date.now()}`, project, store: null });
+      setLoaded({ key: `file:${fileName}:${Date.now()}`, project, store: null, hub: null, id: "" });
       setError(null);
     } catch {
       setError(`“${fileName}” isn't a project file this version can read.`);
@@ -47,7 +70,7 @@ export function App() {
   const openFromHub = useCallback(async (h: Hub, id: string) => {
     try {
       const store = await h.open(id);
-      setLoaded({ key: `hub:${id}:${Date.now()}`, project: store.get().project, store });
+      setLoaded({ key: `hub:${id}:${Date.now()}`, project: store.get().project, store, hub: h, id });
       setProjectParam(id);
       setError(null);
     } catch (e) {
@@ -58,8 +81,7 @@ export function App() {
 
   useEffect(() => {
     let live = true;
-    const url = new URLSearchParams(location.search).get("hub") ?? DEFAULT_HUB;
-    void connectHub(url, { clientName: "tako-skin" }).then(async (h) => {
+    void findHub({ tool: SELF }).then(async (h) => {
       if (!live) return;
       const id = projectParam();
       if (h && id) await openFromHub(h, id);
@@ -93,7 +115,7 @@ export function App() {
       setLoaded(null);
     };
     return loaded.store ? (
-      <LiveDeck key={loaded.key} store={loaded.store} onClose={close} />
+      <LiveDeck key={loaded.key} store={loaded.store} hub={loaded.hub} id={loaded.id} onClose={close} />
     ) : (
       <DeckScreen key={loaded.key} project={loaded.project} onClose={close} />
     );
@@ -102,9 +124,9 @@ export function App() {
   return <OpenScreen hub={hub} error={error} onOpen={open} onOpenProject={(id) => hub && void openFromHub(hub, id)} />;
 }
 
-function LiveDeck({ store, onClose }: { store: ProjectStore; onClose: () => void }) {
+function LiveDeck({ store, hub, id, onClose }: { store: ProjectStore; hub: Hub | null; id: string; onClose: () => void }) {
   const { project } = useSyncExternalStore(store.subscribe, store.get);
-  return <DeckScreen project={project} onClose={onClose} />;
+  return <DeckScreen project={project} hub={hub} projectId={id} onClose={onClose} />;
 }
 
 function useProjectList(hub: Hub | null) {
@@ -218,12 +240,30 @@ function OpenScreen({
   );
 }
 
-function DeckScreen({ project, onClose }: { project: Project; onClose: () => void }) {
-  const [chosenPath, setPathId] = useState(() => project.narratives[0]?.id ?? "");
+function DeckScreen({
+  project,
+  hub = null,
+  projectId = "",
+  onClose,
+}: {
+  project: Project;
+  hub?: Hub | null;
+  projectId?: string;
+  onClose: () => void;
+}) {
+  const tools = useOtherTools(hub);
+  // A link from another tool can point at a node: open the first path that
+  // visits it, on that stop's slide.
+  const [asked] = useState(() => {
+    const node = linkTarget().node;
+    const path = node ? project.narratives.find((n) => n.nodeIds.includes(node)) : undefined;
+    return path && node ? { pathId: path.id, index: path.nodeIds.indexOf(node) + 1 } : null;
+  });
+  const [chosenPath, setPathId] = useState(() => asked?.pathId ?? project.narratives[0]?.id ?? "");
   // The project can change under an open deck (another tool removed the
   // path): fall back to the first one that still exists.
   const pathId = project.narratives.some((n) => n.id === chosenPath) ? chosenPath : (project.narratives[0]?.id ?? "");
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(asked?.index ?? 0);
   const [showSources, setShowSources] = useState(false);
   const [presenting, setPresenting] = useState(false);
   const deck = useMemo<Deck | null>(() => (pathId ? compileDeck(project, pathId) : null), [project, pathId]);
@@ -250,7 +290,14 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
     [slides.length],
   );
 
-  useEffect(() => setIndex(0), [pathId]);
+  // A different path starts from its title slide (but not on first render,
+  // which may have been asked for a particular stop).
+  const shownPath = useRef(pathId);
+  useEffect(() => {
+    if (shownPath.current === pathId) return;
+    shownPath.current = pathId;
+    setIndex(0);
+  }, [pathId]);
   // Keep the current thumbnail in view (the rail scrolls; on phones it's a
   // horizontal strip).
   useEffect(() => {
@@ -322,6 +369,19 @@ function DeckScreen({ project, onClose }: { project: Project; onClose: () => voi
           <h1 style={{ margin: 0, fontSize: "0.9375rem", fontWeight: 700, marginInlineEnd: "auto", minInlineSize: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {project.title || "Untitled graph"}
           </h1>
+          {hub &&
+            tools.map((t) => (
+              <a
+                key={t.id}
+                className="btn"
+                data-variant="ghost"
+                href={hub.linkTo(t, { project: projectId, node: current?.kind === "stop" ? current.node.id : undefined })}
+                target={`tako-${t.id}`}
+                title={current?.kind === "stop" ? `Show this stop in ${t.title.toLowerCase()}` : t.tagline}
+              >
+                {t.title} ↗
+              </a>
+            ))}
           <label className="sr-only" htmlFor="path">
             Path
           </label>

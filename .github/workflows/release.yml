@@ -1,0 +1,23 @@
+# On a version tag: build the page and attach it to a GitHub release as
+# tako-tool.tgz, which is what `tako add evilbagooba/tako-skin` installs.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: tar -czf tako-tool.tgz -C dist .
+      - run: gh release create "$GITHUB_REF_NAME" tako-tool.tgz --title "$GITHUB_REF_NAME" --notes "Built page. Install into a tako hub with: tako add $GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
